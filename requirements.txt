@@ -1,5 +1,5 @@
 black
-"black[jupyter]"
+black[jupyter]
 pandas
 numpy
 Jinja2
