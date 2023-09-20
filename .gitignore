@@ -20,3 +20,6 @@ wheels/
 
 # jupyter notebook
 .ipynb_checkpoints
+
+# Pycharm
+.idea/
