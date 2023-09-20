@@ -1,0 +1,16 @@
+black
+"black[jupyter]"
+pandas
+numpy
+Jinja2
+urllib3
+MLB-StatsAPI
+pybaseball
+requests
+beautifulsoup4
+multiprocess
+ipython
+jupyterlab
+patsy
+scikit-learn
+tensorflow
