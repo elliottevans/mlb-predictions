@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from urllib3.exceptions import HTTPError
 from typing import List, Dict, Union, Tuple, Optional
 import sys
+from functools import partial
 import os
-import numpy as np
+from mlb_predictions.utilities.statsapi_utils import schedule
 from datetime import date, datetime, timedelta
 import warnings
 import statsapi
@@ -79,7 +80,7 @@ def get_pitching_soup(start_dt, end_dt):
     if (start_dt is None) or (end_dt is None):
         print("Error: a date range needs to be specified")
         return None
-    url = "http://www.baseball-reference.com/leagues/daily.cgi?user_team=&bust_cache=&type=p&lastndays=7&dates=fromandto&fromandto={}.{}&level=mlb&franch=&stat=&stat_value=0".format(
+    url = "http://www.baseball-reference.com/leagues/daily.cgi?user_team=&bust_cache=&type=p&dates=fromandto&fromandto={}.{}&level=mlb&franch=ANY&stat_value=0".format(  # noqa
         start_dt, end_dt
     )
     s = requests.get(url).content
@@ -125,47 +126,92 @@ def batting_stats_range(
         raise ValueError("Year must be 2008 or later")
     if end_dt_date.year < 2008:
         raise ValueError("Year must be 2008 or later")
-    # retrieve html from baseball reference
-    soup = get_hitting_soup(start_dt_date, end_dt_date)
-    table = get_table(soup)
-    table = table.dropna(how="all")  # drop if all columns are NA
-    # scraped data is initially in string format.
-    # convert the necessary columns to numeric.
-    for column in [
-        "Age",
-        "#days",
-        "G",
-        "PA",
-        "AB",
-        "R",
-        "H",
-        "2B",
-        "3B",
-        "HR",
-        "RBI",
-        "BB",
-        "IBB",
-        "SO",
-        "HBP",
-        "SH",
-        "SF",
-        "GDP",
-        "SB",
-        "CS",
-        "BA",
-        "OBP",
-        "SLG",
-        "OPS",
-        "mlbID",
-    ]:
-        # table[column] = table[column].astype('float')
-        table[column] = pd.to_numeric(table[column])
-        # table['column'] = table['column'].convert_objects(convert_numeric=True)
-    table = table.drop("", 1)
-    return table
+
+    url = "https://www.fangraphs.com/api/leaders/major-league/data"
+
+    params = {
+        "age": "",
+        "pos": "all",
+        "stats": "bat",  # or pit or fld or bat
+        "lg": "all",
+        "qual": "0",
+        "season": "2023",
+        "season1": "2023",
+        "startdate": start_dt_date,
+        "enddate": end_dt_date,
+        "month": "1000",
+        "team": "0",
+        "pageitems": "2000000000",
+        "pagenum": "1",
+        "ind": "0",
+        "rost": "0",
+        "players": "",
+    }
+    data = requests.get(url, params=params).json()
+
+    # do some munging
+    df = pd.DataFrame(data["data"]).rename(
+        columns={"xMLBAMID": "key_mlbam", "AVG": "BA"}
+    )
+    df["fullName"] = [name[0] for name in df["Name"].str.findall(">(.*)</a>")]
+    df["Age"] = df["AgeR"].str[-2:].astype(int)
+
+    basic_stats = list(HittingStats().basic)
+    advanced_stats = list(HittingStats().advanced)
+
+    return df[["key_mlbam", "fullName"] + basic_stats + advanced_stats]
 
 
-def pitching_stats_range(start_dt=None, end_dt=None):
+def fielding_stats_range(
+    start_dt: Optional[str] = None, end_dt: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Get all fielding stats for a set time range. This can be the past week, the
+    month of August, anything. Just supply the start and end date in YYYY-MM-DD
+    format.
+    """
+    # make sure date inputs are valid
+    start_dt_date, end_dt_date = sanitize_date_range(start_dt, end_dt)
+    if start_dt_date.year < 2008:
+        raise ValueError("Year must be 2008 or later")
+    if end_dt_date.year < 2008:
+        raise ValueError("Year must be 2008 or later")
+
+    url = "https://www.fangraphs.com/api/leaders/major-league/data"
+
+    params = {
+        "age": "",
+        "pos": "all",
+        "stats": "fld",  # or pit or fld or bat
+        "lg": "all",
+        "qual": "0",
+        "season": "2023",
+        "season1": "2023",
+        "startdate": start_dt_date,
+        "enddate": end_dt_date,
+        "month": "1000",
+        "team": "0",
+        "pageitems": "2000000000",
+        "pagenum": "1",
+        "ind": "0",
+        "rost": "0",
+        "players": "",
+    }
+    data = requests.get(url, params=params).json()
+
+    # do some munging
+    df = pd.DataFrame(data["data"]).rename(
+        columns={"xMLBAMID": "key_mlbam", "AVG": "BA"}
+    )
+    df["fullName"] = [name[0] for name in df["Name"].str.findall(">(.*)</a>")]
+
+    basic_stats = list(FieldingStats().basic)
+    advanced_stats = list(FieldingStats().advanced)
+
+    return df[["key_mlbam", "fullName"] + basic_stats + advanced_stats]
+
+
+def pitching_stats_range(start_dt=None, end_dt=None, stat_type=None):
     """
     Get all pitching stats for a set time range. This can be the past week, the
     month of August, anything. Just supply the start and end date in YYYY-MM-DD
@@ -177,53 +223,48 @@ def pitching_stats_range(start_dt=None, end_dt=None):
         raise ValueError("Year must be 2008 or later")
     if end_dt_date.year < 2008:
         raise ValueError("Year must be 2008 or later")
-    # retrieve html from baseball reference
-    soup = get_pitching_soup(start_dt_date, end_dt_date)
-    table = get_table(soup)
-    table = table.dropna(how="all")  # drop if all columns are NA
-    # fix some strange formatting for percentage columns
-    table = table.replace("---%", np.nan)
-    # make sure these are all numeric
-    for column in [
-        "Age",
-        "#days",
-        "G",
-        "GS",
-        "W",
-        "L",
-        "SV",
-        "IP",
-        "H",
-        "R",
-        "ER",
-        "BB",
-        "SO",
-        "HR",
-        "HBP",
-        "ERA",
-        "AB",
-        "2B",
-        "3B",
-        "IBB",
-        "GDP",
-        "SF",
-        "SB",
-        "CS",
-        "PO",
-        "BF",
-        "Pit",
-        "WHIP",
-        "BAbip",
-        "SO9",
-        "SO/W",
-    ]:
-        table[column] = pd.to_numeric(table[column])
-    # convert str(xx%) values to float(0.XX) decimal values
-    for column in ["Str", "StL", "StS", "GB/FB", "LD", "PU"]:
-        table[column] = table[column].replace("%", "", regex=True).astype("float") / 100
+    assert stat_type in ("pitching", "starting_pitching", "relief_pitching")
 
-    table = table.drop("", 1)
-    return table
+    url = "https://www.fangraphs.com/api/leaders/major-league/data"
+
+    if stat_type == "pitching":
+        stat_type_ = "pit"
+    elif stat_type == "starting_pitching":
+        stat_type_ = "sta"
+    else:
+        stat_type_ = "rel"
+
+    params = {
+        "age": "",
+        "pos": "all",
+        "stats": stat_type_,  # or pit or fld or bat or rel
+        "lg": "all",
+        "qual": "0",
+        "season": "2023",
+        "season1": "2023",
+        "startdate": start_dt_date,
+        "enddate": end_dt_date,
+        "month": "1000",
+        "team": "0",
+        "pageitems": "2000000000",
+        "pagenum": "1",
+        "ind": "0",
+        "rost": "0",
+        "players": "",
+    }
+    data = requests.get(url, params=params).json()
+
+    # do some munging
+    df = pd.DataFrame(data["data"]).rename(
+        columns={"xMLBAMID": "key_mlbam", "AVG": "BA"}
+    )
+    df["fullName"] = [name[0] for name in df["Name"].str.findall(">(.*)</a>")]
+    df["Age"] = df["AgeR"].str[-2:].astype(int)
+
+    basic_stats = list(PitchingStats().basic)
+    advanced_stats = list(PitchingStats().advanced)
+
+    return df[["key_mlbam", "fullName"] + basic_stats + advanced_stats]
 
 
 CLASS_REPR_TEMPLATE = """\
@@ -353,47 +394,110 @@ class HittingStats:
         "SLG",
         "OPS",
     )
+    advanced: Tuple = (
+        "BB%",
+        "K%",
+        "BB/K",
+        "BABIP",
+        "wRC",
+        "wRAA",
+        "wOBA",
+        "wRC+",
+        "WAR",
+    )
+
+
+@dataclass
+class FieldingStats:
+    basic: Tuple = (
+        "Pos",
+        "G",
+        "GS",
+        "Inn",
+        "PO",
+        "A",
+        "E",
+        "FE",
+        "TE",
+        "DP",
+        "DPS",
+        "DPT",
+        "DPF",
+        "Scp",
+        "SB",
+        "CS",
+        "PB",
+        "WP",
+        "FP",
+        "TZ",
+    )
+    advanced: Tuple = (
+        "rSZ",
+        "rCERA",
+        "rSB",
+        "rGDP",
+        "rARM",
+        "rGFP",
+        "rPM",
+        "rTS",
+        "DRS",
+        "ARM",
+        "DPR",
+        "RngR",
+        "ErrR",
+        "UZR",
+        "UZR/150",
+        "OAA",
+        "Defense",
+    )
 
 
 @dataclass
 class PitchingStats:
     basic: Tuple = (
         "Age",
-        "G",
-        "GS",
+        "Throws",
         "W",
         "L",
+        "ERA",
+        "G",
+        "GS",
+        "CG",
+        "ShO",
         "SV",
+        "HLD",
+        "BS",
         "IP",
+        "TBF",
         "H",
         "R",
         "ER",
-        "BB",
-        "SO",
         "HR",
-        "HBP",
-        "ERA",
-        "AB",
-        "2B",
-        "3B",
+        "BB",
         "IBB",
-        "GDP",
-        "SF",
-        "SB",
-        "CS",
-        "PO",
-        "BF",
-        "Pit",
-        "Str",
-        "StL",
-        "StS",
-        "GB/FB",
-        "LD",
-        "PU",
+        "HBP",
+        "WP",
+        "BK",
+        "SO",
+    )
+    advanced: Tuple = (
+        "K/9",
+        "BB/9",
+        "K/BB",
+        "HR/9",
+        "K%",
+        "BB%",
+        "K-BB%",
+        "BA",
         "WHIP",
-        "BAbip",
-        "SO9",
-        "SO/W",
+        "BABIP",
+        "LOB%",
+        "ERA-",
+        "FIP-",
+        "FIP",
+        "Soft%",
+        "Med%",
+        "Hard%",
     )
 
 
@@ -416,9 +520,12 @@ class Player:
     initLastName: str = None
     fullFMLName: str = None
     fullLFMName: str = None
+    season: int = None
 
     def __post_init__(self):
-        impute_attrs(self, lookup_func=statsapi.lookup_player)
+        impute_attrs(
+            self, lookup_func=partial(statsapi.lookup_player, season=self.season)
+        )
 
     def __repr__(self):
         return jinja2.Template(CLASS_REPR_TEMPLATE).render(
@@ -476,8 +583,6 @@ class Team:
         date: str,
         roster_type: str = "active",
         as_dataframe: bool = False,
-        n_jobs: int = 5,
-        verbose: bool = False,
     ) -> Union[List[Player], pd.core.frame.DataFrame]:
         roster_types = RosterTypes()
 
@@ -513,8 +618,6 @@ class Team:
         stat_start_date: str = "2008-01-01",
         roster_type: str = "active",
         league_stats: pd.core.frame.DataFrame = None,
-        n_jobs=10,
-        verbose: bool = False,
     ) -> pd.core.frame.DataFrame:
         """Get stats for a team's roster on `date`. `stat_type` is either
         "hitting" or "pitching"
@@ -524,58 +627,15 @@ class Team:
             date=date,
             roster_type=roster_type,
             as_dataframe=True,
-            n_jobs=n_jobs,
-            verbose=verbose,
         )
-        keys = ["player", "key_mlbam"]
 
-        if stat_type == "pitching":
+        if stat_type in ("pitching", "starting_pitching", "relief_pitching"):
             if league_stats is not None:
                 stats = league_stats
             else:
                 stats = pitching_stats_range(
-                    start_dt=stat_start_date, end_dt=stat_end_date
+                    start_dt=stat_start_date, end_dt=stat_end_date, stat_type=stat_type
                 )
-
-            cols_to_fetch = keys + [
-                "Age",
-                "G",
-                "GS",
-                "W",
-                "L",
-                "SV",
-                "IP",
-                "H",
-                "R",
-                "ER",
-                "BB",
-                "SO",
-                "HR",
-                "HBP",
-                "ERA",
-                "AB",
-                "2B",
-                "3B",
-                "IBB",
-                "GDP",
-                "SF",
-                "SB",
-                "CS",
-                "PO",
-                "BF",
-                "Pit",
-                "Str",
-                "StL",
-                "StS",
-                "GB/FB",
-                "LD",
-                "PU",
-                "WHIP",
-                "BAbip",
-                "SO9",
-                "SO/W",
-            ]
-
         elif stat_type == "hitting":
             if league_stats is not None:
                 stats = league_stats
@@ -583,47 +643,33 @@ class Team:
                 stats = batting_stats_range(
                     start_dt=stat_start_date, end_dt=stat_end_date
                 )
-
-            cols_to_fetch = keys + [
-                "Age",
-                "G",
-                "PA",
-                "AB",
-                "R",
-                "H",
-                "2B",
-                "3B",
-                "HR",
-                "RBI",
-                "BB",
-                "IBB",
-                "SO",
-                "HBP",
-                "SH",
-                "SF",
-                "GDP",
-                "SB",
-                "CS",
-                "BA",
-                "OBP",
-                "SLG",
-                "OPS",
-            ]
+        elif stat_type == "fielding":
+            if league_stats is not None:
+                stats = league_stats
+            else:
+                stats = fielding_stats_range(
+                    start_dt=stat_start_date, end_dt=stat_end_date
+                )
         else:
-            raise ValueError("stat_type must be one of ('pitching', 'hitting')")
+            raise ValueError(
+                "stat_type must be one of ('pitching', 'hitting', 'fielding')"
+            )
 
-        stats = stats.rename(columns={"mlbID": "key_mlbam"}).astype({"key_mlbam": int})
-
-        roster_stats = (
-            roster_df.merge(stats, on="key_mlbam", how="left")
-            .drop(columns="Name")
-            .loc[:, cols_to_fetch]
+        roster_stats = roster_df.merge(stats, on="key_mlbam", how="left").drop(
+            columns="fullName"
         )
 
-        assert len(roster_df) == len(roster_stats), (
-            f"roster has {len(roster_df[msk])} rows, but roster stats"
-            f" has {len(roster_stats)} rows!"
-        )
+        if stat_type == "fielding":
+            roster_stats = roster_stats.drop(columns="position").reset_index(
+                drop=True
+            )  # already have Pos
+
+        if stat_type != "fielding":
+            # check not applicable for fielding since most folks have played multiple positions
+            assert len(roster_df) == len(roster_stats), (
+                f"roster has {len(roster_df)} rows, but roster stats"
+                f" has {len(roster_stats)} rows!"
+            )
 
         return roster_stats
 
@@ -741,6 +787,86 @@ class Game:
 
     def get_home_box_score(self) -> pd.core.frame.DataFrame:
         return self._get_box_score("home")
+
+    def get_lineup(self, lineup_type) -> Dict:
+        """
+        Utility function to get gameday lineups
+        :param lineup_type: One of ["home", "away", "home/away"]
+        :return: Dictionary keyed on "home", "away" with values being lists
+            of (player: Player, position: str) tuples
+        """
+        lineup_type = lineup_type.lower()
+
+        assert lineup_type in (
+            "home",
+            "away",
+            "home/away",
+        ), "lineup_type must be in 'home', 'away', or 'home/away'!"
+
+        params = {
+            "sportId": 1,
+            "gamePk": self.game_id,
+            "hydrate": "lineups",
+        }
+        gamedata = statsapi.get("schedule", params=params)
+
+        lineup = {}
+        if lineup_type in ("home", "home/away"):
+            lineup["home"] = [
+                (
+                    Player(player_dict["id"], season=int(self.game_date[:4])),
+                    player_dict["primaryPosition"]["abbreviation"],
+                )
+                for player_dict in [
+                    gamedata["dates"][-1]["games"][0]["lineups"]["homePlayers"]
+                ][0]
+            ]
+        if lineup_type in ("away", "home/away"):
+            lineup["away"] = [
+                (
+                    Player(player_dict["id"], season=int(self.game_date[:4])),
+                    player_dict["primaryPosition"]["abbreviation"],
+                )
+                for player_dict in [
+                    gamedata["dates"][-1]["games"][0]["lineups"]["awayPlayers"]
+                ][0]
+            ]
+
+        return lineup
+
+    def get_probable_pitcher(self, pitcher_type) -> Dict:
+        pitcher_type = pitcher_type.lower()
+
+        assert pitcher_type in (
+            "home",
+            "away",
+            "home/away",
+        ), "pitcher_type must be in 'home', 'away', or 'home/away'!"
+
+        params = {
+            "sportId": 1,
+            "gamePk": self.game_id,
+            "hydrate": "probablePitcher(note)",
+        }
+        gamedata = statsapi.get("schedule", params=params)
+
+        probable_pitcher = {}
+        if pitcher_type in ("home", "home/away"):
+            probable_pitcher["home"] = Player(
+                gamedata["dates"][-1]["games"][0]["teams"]["home"]["probablePitcher"][
+                    "id"
+                ],
+                season=int(self.game_date[:4]),
+            )
+        if pitcher_type in ("away", "home/away"):
+            probable_pitcher["away"] = Player(
+                gamedata["dates"][-1]["games"][0]["teams"]["away"]["probablePitcher"][
+                    "id"
+                ],
+                season=int(self.game_date[:4]),
+            )
+
+        return probable_pitcher
 
 
 @dataclass
@@ -861,26 +987,34 @@ class Schedule:
             while True:
                 try:
                     if self._dates_are_consecutive(dates):
-                        _games = statsapi.schedule(
-                            start_date=min(dates), end_date=max(dates)
+                        _games = (
+                            schedule(  # TODO: switch to statsapi.schedule when fixed
+                                start_date=min(dates), end_date=max(dates)
+                            )
                         )
 
                     else:
                         _games = []
                         for d in dates:
-                            _games.extend(statsapi.schedule(date=d))
+                            _games.extend(
+                                schedule(date=d)
+                            )  # TODO: switch to statsapi.schedule when fixed
 
                 except HTTPError:
                     continue
                 break
 
         if self._dates_are_consecutive(dates):
-            _games = statsapi.schedule(start_date=min(dates), end_date=max(dates))
+            _games = schedule(
+                start_date=min(dates), end_date=max(dates)
+            )  # TODO: switch to statsapi.schedule when fixed
 
         else:
             _games = []
             for d in dates:
-                _games.extend(statsapi.schedule(date=d))
+                _games.extend(
+                    schedule(date=d)
+                )  # TODO: switch to statsapi.schedule when fixed
 
         # munge the game types
         game_types = [game_type] if not isinstance(game_type, list) else game_type
@@ -929,10 +1063,17 @@ class Schedule:
     ) -> List[Game]:
         """Get days in which there are scheduled games"""
 
+        game_type = game_type.lower().title()
+        game_status = game_status.lower().title()
+
         game_types = GameTypes()
+        game_statuses = GameStatuses()
 
         if not game_types.is_valid_value(game_type):
             raise ValueError(f"game_type must be one of: {game_types.get()}")
+
+        if not game_statuses.is_valid_value(game_status):
+            raise ValueError(f"game_status must be one of: {game_statuses.get()}")
 
         _games = self._get_games(
             dates=self._valid_dates, game_type=game_type, game_status=game_status

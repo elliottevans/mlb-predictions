@@ -4,7 +4,7 @@ pandas
 numpy
 Jinja2
 urllib3
-MLB-StatsAPI
+MLB-StatsAPI==1.7
 pybaseball
 requests
 beautifulsoup4
