@@ -1,13 +1,18 @@
+from mlb_predictions.utilities.statsapi_utils import schedule
+from mlb_predictions.utilities.stats_utils import (
+    HittingStats,
+    PitchingStats,
+    FieldingStats,
+)
 import pandas as pd
 from io import StringIO
 import jinja2
 from dataclasses import dataclass
 from urllib3.exceptions import HTTPError
-from typing import List, Dict, Union, Tuple, Optional
+from typing import List, Dict, Union, Optional
 import sys
 from functools import partial
 import os
-from mlb_predictions.utilities.statsapi_utils import schedule
 from datetime import date, datetime, timedelta
 import warnings
 import statsapi
@@ -365,140 +370,6 @@ def impute_attrs(obj, lookup_func):
 
         for attr, value in full_attrs.items():
             obj.__setattr__(attr, value)
-
-
-@dataclass
-class HittingStats:
-    basic: Tuple = (
-        "Age",
-        "G",
-        "PA",
-        "AB",
-        "R",
-        "H",
-        "2B",
-        "3B",
-        "HR",
-        "RBI",
-        "BB",
-        "IBB",
-        "SO",
-        "HBP",
-        "SH",
-        "SF",
-        "GDP",
-        "SB",
-        "CS",
-        "BA",
-        "OBP",
-        "SLG",
-        "OPS",
-    )
-    advanced: Tuple = (
-        "BB%",
-        "K%",
-        "BB/K",
-        "BABIP",
-        "wRC",
-        "wRAA",
-        "wOBA",
-        "wRC+",
-        "WAR",
-    )
-
-
-@dataclass
-class FieldingStats:
-    basic: Tuple = (
-        "Pos",
-        "G",
-        "GS",
-        "Inn",
-        "PO",
-        "A",
-        "E",
-        "FE",
-        "TE",
-        "DP",
-        "DPS",
-        "DPT",
-        "DPF",
-        "Scp",
-        "SB",
-        "CS",
-        "PB",
-        "WP",
-        "FP",
-        "TZ",
-    )
-    advanced: Tuple = (
-        "rSZ",
-        "rCERA",
-        "rSB",
-        "rGDP",
-        "rARM",
-        "rGFP",
-        "rPM",
-        "rTS",
-        "DRS",
-        "ARM",
-        "DPR",
-        "RngR",
-        "ErrR",
-        "UZR",
-        "UZR/150",
-        "OAA",
-        "Defense",
-    )
-
-
-@dataclass
-class PitchingStats:
-    basic: Tuple = (
-        "Age",
-        "Throws",
-        "W",
-        "L",
-        "ERA",
-        "G",
-        "GS",
-        "CG",
-        "ShO",
-        "SV",
-        "HLD",
-        "BS",
-        "IP",
-        "TBF",
-        "H",
-        "R",
-        "ER",
-        "HR",
-        "BB",
-        "IBB",
-        "HBP",
-        "WP",
-        "BK",
-        "SO",
-    )
-    advanced: Tuple = (
-        "K/9",
-        "BB/9",
-        "K/BB",
-        "HR/9",
-        "K%",
-        "BB%",
-        "K-BB%",
-        "BA",
-        "WHIP",
-        "BABIP",
-        "LOB%",
-        "ERA-",
-        "FIP-",
-        "FIP",
-        "Soft%",
-        "Med%",
-        "Hard%",
-    )
 
 
 @dataclass
